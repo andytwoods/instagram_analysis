@@ -1,0 +1,369 @@
+---
+title: "instagram_data_combiner"
+author: "Andy Woods"
+date: "2024-06-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+# library(MASS)
+# library(ggeffects)
+# library(effects)
+if(!require(psych)){install.packages("psych")}
+# if(!require(FSA)){install.packages("FSA")}
+# if(!require(lattice)){install.packages("lattice")}
+# if(!require(ordinal)){install.packages("ordinal")}
+# if(!require(car)){install.packages("car")}
+# if(!require(RVAideMemoire)){install.packages("RVAideMemoire")}
+# if(!require(multcomp)){install.packages("multcomp")}
+# if(!require(emmeans)){install.packages("emmeans")}
+# if(!require(viridis)){install.packages("viridis")}
+library(ggplot2)
+# library(reshape2)
+# library(RColorBrewer)
+# library(ggthemes)
+# library(brms)
+# library("ggdist")
+library(viridis)
+# library(patchwork)
+library(sjPlot)
+# library(multcomp)
+library(lme4)
+# library(magrittr)
+# library(purrr)
+# library(forcats)
+# library(tidyr)
+# library(modelr)
+# library(ggdist)
+# # library(tidybayes)
+# library(ggplot2)
+# library(cowplot)
+# library(ggrepel)
+# library(RColorBrewer)
+# # library(gganimate)
+# library(posterior)
+# library(distributional)
+library(robustlmm)
+library(performance)
+
+```
+
+
+load csv
+```{r}
+
+
+load_data_per_cohort <-
+  function(t0_file_nam, tx_file_nam, cohort_name) {
+    
+    clean_duplicates <- function(tib, prefix){
+      outcome <- tib |>
+        mutate(unique_sj_id = if_else(str_length(prolific_id) == 24 , 
+                                   paste0(prefix, '_', cohort_name, '_unique_id_', prolific_id), prolific_id, 
+                                   paste0(prefix, '_', cohort_name, '_unique_id_', row_number()
+                                          ))) |>
+        distinct(unique_sj_id, .keep_all=T) |>
+        filter(str_length(prolific_id) < 28) |>
+        mutate_all(as.character)
+      # print(paste0(cohort_name,'  ', prefix,  ' before cleaned:', nrow(outcome), '   after cleaned:', nrow(tib)))
+      
+      # [1] "mil  to before cleaned:567   after cleaned:681"
+      # [1] "mil  tx before cleaned:390   after cleaned:407"
+      # [1] "map  to before cleaned:572   after cleaned:715"
+      # [1] "map  tx before cleaned:385   after cleaned:400"
+      # [1] "bbc  to before cleaned:844   after cleaned:1055"
+      # [1] "bbc  tx before cleaned:370   after cleaned:392"
+      # [1] "va  to before cleaned:591   after cleaned:704"
+      # [1] "va  tx before cleaned:366   after cleaned:390"
+      return(outcome)
+    }
+
+    
+    t0_df = clean_duplicates(tibble(read.csv(t0_file_nam)), "to")
+    tx_df = clean_duplicates(tibble(read.csv(tx_file_nam)), "tx")
+    
+        # correcting wrongly titled columns
+    if (cohort_name == "va") {
+      t0_df |>
+        rename(Q_dre_2 = question3,
+               Q_dre_3 = question4,)
+      tx_df |>
+        rename(Q_dre_2 = question3,
+               Q_dre_3 = question4,)
+    }
+    
+    t0 <- t0_df |> select(starts_with("Q_"), starts_with("memory_score_"), user_at_start, age, ar_frequency,
+                          study_name, ar_frequency, prolific_id, created, username)
+
+    tx <- tx_df |>
+    select(starts_with("Q_"), starts_with("memory_score_"), prolific_id, created, unique_sj_id) |>
+      rename_with( ~ paste0("X1monthlater_", .x),
+                   starts_with("Q_")) |>
+      # below, removing 'created' via
+      mutate(X1monthlater_created = created, .keep = "unused",  .before=0)
+    
+    
+    combined <- full_join(tx, t0, by = "prolific_id") |> 
+      relocate(
+        X1monthlater_created, created, .before = NULL,
+      )
+    
+    combined <- combined |>
+      mutate(
+        date_of_test2 = parse_datetime(X1monthlater_created),
+        date_of_test1 = parse_datetime(created),
+        days =  as.integer(difftime(date_of_test2, date_of_test1)),
+        days = if_else(is.na(days), 0, days),
+        media = case_when(
+          str_detect(study_name, '_FLAT') ~ 'flat',
+          str_detect(study_name, '_AR') ~ 'ar',
+        ),
+        .before = 1
+      ) |>
+      select(-created,-X1monthlater_created)
+
+    combined <- combined |>
+      mutate(id = row_number(),
+             cohort = cohort_name, ) |>
+        pivot_longer(cols=contains("Q_"),
+               values_to='score',
+               names_to='exp_title_question') |>
+      mutate(
+        delay = str_detect(exp_title_question, "X1monthlater"),
+        days = if_else(str_detect(exp_title_question, "X1monthlater"), days, 0),
+        exp_title_question = str_remove(exp_title_question, "X1monthlater_Q_"),
+        exp_title_question = str_remove(exp_title_question, "Q_")) |>
+        filter(user_at_start=="AnonymousUser") |>
+        select(-username, -user_at_start, -id)
+      
+    
+    return(combined)
+  }
+
+
+mil <- load_data_per_cohort("data_compile/mil2024.csv", "data_compile/mil_9month_FINAL.csv", 'mil')
+map <- load_data_per_cohort("data_compile/map2024.csv", "data_compile/map_9month_FINAL.csv", 'map')
+bbc <- load_data_per_cohort("data_compile/bbc2024.csv", "data_compile/bbc_9month_FINAL.csv", 'bbc')
+va <- load_data_per_cohort("data_compile/va2024.csv","data_compile/va_9month_FINAL.csv", 'va')
+
+combined_data <- bind_rows(mil, map, bbc, va) |>
+  #select(-date_of_test2, -date_of_test1, -prolific_id) |>
+  rename(id = unique_sj_id) |>
+    mutate(
+     ar_frequency = case_when(
+       ar_frequency == "Never" ~ 0,
+       ar_frequency == "Sometimes, but less than once a month" ~ 1,
+       ar_frequency == "About once a month" ~ 2,
+       ar_frequency == "Several times a month" ~ 3,
+       ar_frequency == "A few times a week" ~ 4,
+       ar_frequency == "About daily" ~ 5
+       ),
+     id = factor(id),
+     score = case_when(
+       score == 1 ~ 1,
+       score < 1 ~ 0,
+       TRUE ~ NA),
+     media = factor(media),
+     exp_title_question = str_remove(exp_title_question,"X1monthlater_"),
+     exp_title = gsub("_", "", str_extract(exp_title_question, ".*_")),
+     cohort = factor(cohort),
+     months = days/30,
+     # nb someone entered a stupidly high age, so we set that to NA below
+     # note that age is in decades
+     age = as.integer(age),
+     age = if_else(age < 100, age/10, NA)) |>
+    filter(exp_title_question!="dd_1.Comment") |>
+    drop_na()
+
+```
+
+
+# checking data validity
+```{r}
+# wise to eyeball data to make sure expected #SJs (allowance for voluntary entry of data => missing data)
+combined_data |>
+    mutate(delay=case_when(
+          days == 0 ~ "0",
+          days < 50 ~ "1",
+          days < 400 ~ "2"
+        )) |>
+    group_by(cohort, delay, media) |>
+  dplyr::summarize(mean1 = mean(score), datapoints= n(), SJs=n_distinct(id)) |> print(n=24)
+#    cohort delay media mean1 datapoints   SJs
+#    <fct>  <chr> <fct> <dbl>      <int> <int>
+#  1 bbc    0     ar    0.610       2284   157
+#  2 bbc    0     flat  0.681       2221   149
+#  3 bbc    1     ar    0.532       1213    82
+#  4 bbc    1     flat  0.553       1218    82
+#  5 bbc    2     ar    0.457       1158    78
+#  6 bbc    2     flat  0.494       1064    72
+#  7 map    0     ar    0.432       2320   164
+#  8 map    0     flat  0.575       2408   165
+#  9 map    1     ar    0.383       1184    80
+# 10 map    1     flat  0.447       1231    83
+# 11 map    2     ar    0.365       1249    84
+# 12 map    2     flat  0.330       1211    82
+# 13 mil    0     ar    0.503       2443   166
+# 14 mil    0     flat  0.572       2521   171
+# 15 mil    1     ar    0.454       1155    79
+# 16 mil    1     flat  0.498       1219    83
+# 17 mil    2     ar    0.465       1300    88
+# 18 mil    2     flat  0.454       1296    88
+# 19 va     0     ar    0.414       2051   160
+# 20 va     0     flat  0.576       1857   144
+# 21 va     1     ar    0.365       1084    84
+# 22 va     1     flat  0.434        963    75
+# 23 va     2     ar    0.341       1002    78
+# 24 va     2     flat  0.349        898    70
+
+
+# checking for data entered at unexpected time delays. Looks good
+combined_data |>
+  ggplot(aes(x=months, y=score, color=media)) +
+  geom_smooth(method=lm) + geom_jitter()
+
+
+# below shows that we indeed have 5 non-overlapping experiences per cohort
+combined_data |>
+  ggplot(aes(x=months, y=score, color=media)) +
+  geom_smooth(method=lm) + 
+  facet_grid(rows=vars(exp_title), cols=vars(cohort))
+
+
+# below shows that in# below shows that in# below shows that indeed months*media pattern common over all experiences
+# helping check no systematic oddities in data
+combined_data |>
+  mutate(
+    exp_title = case_when(
+      exp_title %in% c("ani", "ay", "met", "dre") ~ 'a',
+      exp_title %in% c("dee", "dd", "mus", "shr") ~ 'b',
+      exp_title %in% c("hum", "el", "sku", "the") ~ 'c',
+      exp_title %in% c("lif", "sp", "spa", "tia") ~ 'd',
+      exp_title %in% c("res", "ss", "vic", "va") ~ 'e',
+    )
+  ) |>
+  ggplot(aes(x=months, y=score, color=media)) +
+  geom_smooth(method=lm) + 
+  facet_grid(rows=vars(exp_title), cols=vars(cohort))
+  
+
+```
+
+
+
+
+```{r}
+
+fit.complex <- glmer(score ~ 1 + age + ar_frequency + media * months + (1  | exp_title / exp_title_question) + (1 | cohort / id)  ,  family = binomial("logit"), data=combined_data, nAGQ=0, control=glmerControl(optimizer = "nloptwrap"))
+
+
+plot_model(fit.complex, type = "pred", terms = c("months[all]", "media")) + 
+  geom_rug(sides='b', alpha = 1/2, position = "jitter") + 
+  theme_minimal()
+
+plot_model(fit.complex, type = "pred", terms = c("exp_title", "exp_title_question"), pred.type='re', ci.lvl=NA, colors = 'darkgray', show.legend = T, dot.size=3, dodge = 0, alpha=.5)  + theme_minimal()
+
+tab_model(fit.complex)
+performance::check_model(fit.complex) 
+
+binned_residuals_outcome <- performance::binned_residuals(fit.complex) 
+# Warning: Probably bad model fit. Only about 45% of the residuals are inside the error bounds.
+# AW: implies predictor log transform maybe needed https://easystats.github.io/performance/reference/binned_residuals.html
+plot(binned_residuals_outcome, show_dots = TRUE)
+```
+
+
+
+below, checking linearity of regression via splines for media. Peak at max months 
+```{r}
+fit.spline <- rlm(score ~ 1 + age + ar_frequency + bs(months, df=3) * media, data=combined_data, family = binomial("logit"))
+
+# although this looks iffy, see next graph
+plot_model(fit.spline, type = "pred", terms = c("months[all]", "media"), show.data = T, jitter=T ) + 
+     geom_rug(sides='b', alpha = 1/2, position = "jitter") + 
+     theme_minimal()
+
+# feel weird splines linked with no data between 3-6 
+combined_data |>
+  mutate(
+    exp_title = case_when(
+      exp_title %in% c("ani", "ay", "met", "dre") ~ 'a',
+      exp_title %in% c("dee", "dd", "mus", "shr") ~ 'b',
+      exp_title %in% c("hum", "el", "sku", "the") ~ 'c',
+      exp_title %in% c("lif", "sp", "spa", "tia") ~ 'd',
+      exp_title %in% c("res", "ss", "vic", "va") ~ 'e',
+    )
+  ) |>
+  ggplot(aes(x=months, y=score, color=media)) +
+  geom_smooth(method=loess) + 
+  geom_rug(sides='b', alpha = 1/2, position = "jitter") + 
+  facet_grid(rows=vars(exp_title), cols=vars(cohort))
+  
+```
+
+
+
+exploring factorising time 
+```{r}
+
+fit.months_factor <- combined_data |>
+   mutate(months=case_when(
+          days == 0 ~ "time 0",
+          days < 50 ~ "time 1",
+          days < 400 ~ "time 2"
+        ),
+        months = factor(months)) |>
+  glmer(formula=score ~ 1 + age + ar_frequency + media * months + (1  | exp_title / exp_title_question) + (1 | cohort / id)  ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"))
+
+
+plot_model(fit.months_factor, type = "pred", terms = c("months[all]", "media", "cohort")) + 
+  geom_rug(sides='b', alpha = 1/2) + 
+  theme_minimal()
+
+plot_model(fit.months_factor, type = "pred", terms = c("exp_title", "exp_title_question"), pred.type='re', ci.lvl=NA, colors = 'darkgray', show.legend = T, dot.size=3, dodge = 0, alpha=.5)  + theme_minimal()
+
+tab_model(fit.months_factor)
+performance::check_model(fit.months_factor) 
+
+binned_residuals_outcome <- performance::binned_residuals(fit.months_factor) 
+# Warning: Probably bad model fit. Only about 45% of the residuals are inside the error bounds.
+# AW: implies predictor log transform maybe needed https://easystats.github.io/performance/reference/binned_residuals.html
+plot(binned_residuals_outcome, show_dots = TRUE)
+```
+
+```{r}
+
+combined_data |>
+   mutate(months=case_when(
+          days == 0 ~ "time 0",
+          days < 50 ~ "time 1",
+          days < 400 ~ "time 2"
+        )) |>
+  group_by(months) |>
+  summarise(av=mean(days), min(days), max(days)/30)
+
+#   months    av `min(days)`
+#   <chr>  <dbl>       <dbl>
+# 1 time 0   0             0
+# 2 time 1  26.9          22
+# 3 time 2 219.          177
+
+fit.issue <-
+  
+  combined_data |>
+   # mutate(months=case_when(
+   #        days < 50 ~ days / 30,
+   #        days < 400~ (days - 177 + (22 * 2) + 1)/30
+   #      )) |>
+  glmer(formula=score ~ 1 + age + ar_frequency + media * I(months^2) + (1  | exp_title / exp_title_question) + (1 | cohort / id)  ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"))
+
+plot_model(fit.issue, type = "pred", terms = c("months", "media"), pred.type='re', ci.lvl=NA, show.legend = T, dot.size=3, dodge = 0, alpha=.5)  + theme_minimal()
+
+
+```
+
