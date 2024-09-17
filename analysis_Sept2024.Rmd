@@ -1,0 +1,888 @@
+---
+title: "instagram_data_combiner"
+author: "Andy Woods"
+date: "2024-06-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(corrr)
+library(patchwork)
+library(kableExtra)
+# library(MASS)
+# library(ggeffects)
+# library(effects)
+if(!require(psych)){install.packages("psych")}
+# if(!require(FSA)){install.packages("FSA")}
+# if(!require(lattice)){install.packages("lattice")}
+# if(!require(ordinal)){install.packages("ordinal")}
+# if(!require(car)){install.packages("car")}
+# if(!require(RVAideMemoire)){install.packages("RVAideMemoire")}
+# if(!require(multcomp)){install.packages("multcomp")}
+if(!require(emmeans)){install.packages("emmeans")}
+# if(!require(viridis)){install.packages("viridis")}
+library(ggplot2)
+# library(reshape2)
+# library(RColorBrewer)
+# library(ggthemes)
+# library(brms)
+# library("ggdist")
+library(viridis)
+library(gtsummary)
+# library(patchwork)
+library(sjPlot)
+# library(multcomp)
+library(lme4)
+# library(magrittr)
+# library(purrr)
+# library(forcats)
+# library(tidyr)
+# library(modelr)
+# library(ggdist)
+# # library(tidybayes)
+# library(ggplot2)
+# library(cowplot)
+# library(ggrepel)
+# library(RColorBrewer)
+# # library(gganimate)
+# library(posterior)
+# library(distributional)
+library(robustlmm)
+library(performance)
+library(corrr)
+
+```
+
+
+load csv
+```{r}
+
+replace_many_names <- function(ds1, ds2, from_nam, to_nam){
+      colnames(ds1) <- sub(from_nam, to_nam, colnames(ds1))
+}
+
+load_data_per_cohort <-
+  function(t0_file_nam, tx_file_nam, cohort_name) {
+    
+    clean_duplicates <- function(tib, prefix){
+      outcome <- tib |>
+        mutate(unique_sj_id = if_else(str_length(prolific_id) == 24 , 
+                                   paste0(prefix, '_', cohort_name, '_unique_id_', prolific_id), prolific_id, 
+                                   paste0(prefix, '_', cohort_name, '_unique_id_', row_number()
+                                          ))) |>
+        distinct(unique_sj_id, .keep_all=T) |>
+        filter(str_length(prolific_id) < 28) |>
+        mutate_all(as.character)
+      # print(paste0(cohort_name,'  ', prefix,  ' before cleaned:', nrow(outcome), '   after cleaned:', nrow(tib)))
+      
+      # [1] "mil  to before cleaned:567   after cleaned:681"
+      # [1] "mil  tx before cleaned:390   after cleaned:407"
+      # [1] "map  to before cleaned:572   after cleaned:715"
+      # [1] "map  tx before cleaned:385   after cleaned:400"
+      # [1] "bbc  to before cleaned:844   after cleaned:1055"
+      # [1] "bbc  tx before cleaned:370   after cleaned:392"
+      # [1] "va  to before cleaned:591   after cleaned:704"
+      # [1] "va  tx before cleaned:366   after cleaned:390"
+      return(outcome)
+    }
+
+    
+    t0_df = clean_duplicates(tibble(read.csv(t0_file_nam)), "to")
+    tx_df = clean_duplicates(tibble(read.csv(tx_file_nam)), "tx")
+    
+    rename_cols = function(from_list, to_list){
+      for(i in 1:length(from_list)){
+        colnames(t0_df) <- sub(from_list[i], to_list[i], colnames(t0_df))
+      }
+      # to update the dataframe outside of the scope of this function we need to use the below odd notation <<-
+      t0_df <<- t0_df
+    }
+        # correcting wrongly titled columns
+    if (cohort_name == "va") {
+      t0_df |>
+        rename(Q_dre_2 = question3,
+               Q_dre_3 = question4,)
+      tx_df |>
+        rename(Q_dre_2 = question3,
+               Q_dre_3 = question4,)
+      rename_cols(c('wearable', 'theatrical', 'v.a', 'dress', '.shrinking'), c('tia', 'the', 'va', 'dre', 'shr'))
+    }
+    
+    else if(cohort_name == 'mil'){
+      rename_cols(c('skull', 'science', 'satellite', 'music', 'victorian'), c('sku', 'met', 'spa', 'mus', 'vic'))
+    }
+    
+    else if(cohort_name == 'map'){
+      rename_cols(c('artify', 'jyoti', 'shadow', 'stories', 'rider'), c('ay', 'dd', 'sp', 'ss', 'el'))
+    }
+  
+    else if(cohort_name == 'bbc'){
+      rename_cols(c('restore', 'feed', 'meerkat', 'life', 'creatures'), c('res', 'hum', 'ani', 'lif', 'dee'))
+    }
+
+    # below, note how presence_beingthere has NO _ suffix. On purpose
+    t0 <- t0_df |> dplyr::select(starts_with("Q_"), user_at_start, age, ar_frequency, duration_seconds,
+                          study_name, ar_frequency, prolific_id, created, username,
+                          starts_with("enjoy_"),  starts_with("knew_"), starts_with("surround_"), starts_with("captivated_"),
+                          starts_with("presence_beingthere"),  starts_with("emotion_awe_"),  starts_with("emotion_boredom_"),
+                          starts_with("presence_real_") )
+
+    tx <- tx_df |>
+    dplyr::select(starts_with("Q_"), starts_with("memory_score_"), prolific_id, created, unique_sj_id, ) |>
+      rename_with( ~ paste0("X1monthlater_", .x),
+                   starts_with("Q_")) |>
+      # below, removing 'created' via
+      mutate(X1monthlater_created = created, .keep = "unused",  .before=0)
+    
+    
+    combined <- full_join(tx, t0, by = "prolific_id") |> 
+      relocate(
+        X1monthlater_created, created, .before = NULL,
+      )
+    
+    combined <- combined |>
+      mutate(
+        date_of_test2 = parse_datetime(X1monthlater_created),
+        date_of_test1 = parse_datetime(created),
+        days =  as.integer(difftime(date_of_test2, date_of_test1)),
+        days = if_else(is.na(days), 0, days),
+        media = case_when(
+          str_detect(study_name, '_FLAT') ~ 'flat',
+          str_detect(study_name, '_AR') ~ 'ar',
+        ),
+        .before = 1
+      ) |>
+      dplyr::select(-created,-X1monthlater_created)
+
+    combined <- combined |>
+      mutate(id = row_number(),
+             cohort = cohort_name, ) 
+
+    combined <- combined |>
+        pivot_longer(cols=contains("Q_"),
+               values_to='score',
+               names_to='exp_title_question') 
+    
+    combined <- combined |>
+      mutate(
+        from_x_months_later_dataset = exp_title_question,
+        exp_title_question = str_remove(exp_title_question, "X1monthlater_Q_"),
+        exp_title_question = str_remove(exp_title_question, "Q_"),
+        exp_title = gsub("_", "", str_extract(exp_title_question, ".*_")),) 
+    
+    #####################
+
+    for(colname in c("enjoy_", "knew_", "surround_", "captivated_", "presence_beingthere_", "emotion_awe_", "emotion_boredom_", "presence_real_")) {
+      
+      cleaned_colname = substr(colname, 1, nchar(colname)-1)
+      
+      combined_length = nrow(combined)
+      combined[, cleaned_colname] = NA
+      for(i in 1:combined_length){
+        lookup_col = paste0(colname, combined$exp_title[i])
+        retrieved = combined[i, lookup_col]
+        combined[i, cleaned_colname] <- retrieved
+      }
+    }
+
+    #####################  
+    
+    
+    combined <- combined |>
+      mutate(
+        gap = if_else(days <50, 0, 1),
+        days = if_else(str_detect(from_x_months_later_dataset, "X1monthlater"), days, 0),
+        .before = 1
+        ) |>
+      filter(user_at_start=="AnonymousUser") |>
+      dplyr::select(delay, date_of_test2, date_of_test1, days, media, duration_seconds, unique_sj_id,  age, ar_frequency,  study_name, cohort, exp_title_question, score, exp_title, enjoy, 
+                    knew, surround, captivated, presence_beingthere, emotion_awe, emotion_boredom, presence_real, gap)
+      
+    return(combined)
+  }
+
+
+mil <- load_data_per_cohort("data_compile/mil2024.csv", "data_compile/mil_9month_FINAL.csv", 'mil')
+map <- load_data_per_cohort("data_compile/map2024.csv", "data_compile/map_9month_FINAL.csv", 'map')
+bbc <- load_data_per_cohort("data_compile/bbc2024.csv", "data_compile/bbc_9month_FINAL.csv", 'bbc')
+va <- load_data_per_cohort("data_compile/va2024.csv","data_compile/va_9month_FINAL.csv", 'va')
+
+combined_data <- bind_rows(mil, map, bbc, va) |>
+  #select(-date_of_test2, -date_of_test1, -prolific_id) |>
+  rename(id = unique_sj_id) |>
+    mutate(
+     ar_frequency = case_when(
+       ar_frequency == "Never" ~ 0,
+       ar_frequency == "Sometimes, but less than once a month" ~ 1,
+       ar_frequency == "About once a month" ~ 2,
+       ar_frequency == "Several times a month" ~ 3,
+       ar_frequency == "A few times a week" ~ 4,
+       ar_frequency == "About daily" ~ 5
+       ),
+     id = factor(id),
+     score = case_when(
+       score == 1 ~ 1,
+       score < 1 ~ 0,
+       TRUE ~ NA),
+     media = factor(media),
+     exp_title_question = str_remove(exp_title_question,"X1monthlater_"),
+     exp_title = gsub("_", "", str_extract(exp_title_question, ".*_")),
+     cohort = factor(cohort),
+     presence_real = as.integer(presence_real),
+     emotion_awe = as.integer(emotion_awe),
+     emotion_boredom = as.integer(emotion_boredom),
+     presence_beingthere = as.integer(presence_beingthere),
+     captivated = as.integer(captivated),
+     surround = as.integer(surround),
+     knew = as.integer(knew),
+     months = days/30,
+     months=case_when(
+          days == 0 ~ "t0",
+          days < 50 ~ "t1",
+          days < 400 ~ "t2"
+        ),
+     months=factor(months),
+     # nb someone entered a stupidly high age, so we set that to NA below
+     # note that age is in decades
+     age = as.integer(age),
+     age = if_else(age < 100, age/10, NA)) |>
+    filter(exp_title_question!="dd_1.Comment") |>
+    drop_na()
+
+
+saveRDS(mil, 'mil.rds')
+saveRDS(map, 'map.rds') 
+saveRDS(bbc, 'bbc.rds') 
+saveRDS(va, 'va.rds') 
+saveRDS(combined_data, "combined_data.rds")
+
+```
+
+
+```{r}
+combined_data <- readRDS("combined_data.rds")
+```
+
+
+
+# compiling demographics
+```{r}
+combined_data |>
+  dplyr::summarize(
+                   SJs=n_distinct(id), 
+                   age_mean=mean(age*10), 
+                   age_sd=sd(age*10),
+                   age_min=min(age*10),
+                   age_max=max(age*10),
+                   ) |> print(n=24)
+
+#     SJs age_mean age_sd age_min age_max
+#   <int>    <dbl>  <dbl>   <dbl>   <dbl>
+# 1  1270     28.6   9.58      18      81
+
+combined_data |>
+    group_by(cohort, months, media) |>
+  dplyr::summarize(
+                   SJs=n_distinct(id), 
+                   age_mean=sprintf("%.1f (%.1f)", mean(age*10) , sd(age*10))
+                   ) |> 
+  kable("html", 
+        col.names = c("cohort", "months", "media", "count", "age (sd)")
+        ) |>
+  collapse_rows(columns = 1:3, valign = "top") |>
+  kable_styling()
+
+#   cohort months media   SJs age_mean age_sd
+#    <fct>  <fct>  <fct> <int>    <dbl>  <dbl>
+#  1 bbc    t0     ar      155     29.3  10.1 
+#  2 bbc    t0     flat    149     28.4   9.69
+#  3 bbc    t1     ar       79     29.4  10.2 
+#  4 bbc    t1     flat     81     28.5  10.5 
+#  5 bbc    t2     ar       78     29.2   9.92
+#  6 bbc    t2     flat     68     28.4   8.70
+#  7 map    t0     ar      156     28.3   8.89
+#  8 map    t0     flat    163     28.1   8.77
+#  9 map    t1     ar       79     28.4   9.62
+# 10 map    t1     flat     83     28.0   8.55
+# 11 map    t2     ar       80     28.1   8.24
+# 12 map    t2     flat     80     28.1   8.90
+# 13 mil    t0     ar      166     27.5   8.71
+# 14 mil    t0     flat    171     29.1  10.0 
+# 15 mil    t1     ar       79     27.2   8.35
+# 16 mil    t1     flat     83     29.6  11.1 
+# 17 mil    t2     ar       87     27.8   9.07
+# 18 mil    t2     flat     88     28.6   8.89
+# 19 va     t0     ar      160     29.6  10.4 
+# 20 va     t0     flat    144     29.1  10.1 
+# 21 va     t1     ar       84     29.9  10.2 
+# 22 va     t1     flat     75     28.3  10.9 
+# 23 va     t2     ar       76     29.3  10.4 
+# 24 va     t2     flat     70     29.7   9.16
+
+combined_data |>
+  dplyr::select(gender_1) |>
+  tbl_summary(statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} / {N} ({p}%)"
+    ))
+
+combined_data |>
+  dplyr::select(country) |>
+  tbl_summary(sort = all_categorical() ~ "frequency", statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} / {N} ({p}%)"
+    ), missing='always')
+
+```
+
+# checking data validity
+```{r}
+# wise to eyeball data to make sure expected #SJs (allowance for voluntary entry of data => missing data)
+combined_data |>
+    group_by(cohort, months, media) |>
+  dplyr::summarize(mean1 = mean(score),
+                   datapoints= n(), 
+                   SJs=n_distinct(id), 
+                   age_mean=mean(age*10), 
+                   age_sd=sd(age*10)
+                   ) |> print(n=24)
+#    cohort delay media mean1 datapoints   SJs
+#    <fct>  <chr> <fct> <dbl>      <int> <int>
+#  1 bbc    0     ar    0.610       2284   157
+#  2 bbc    0     flat  0.681       2221   149
+#  3 bbc    1     ar    0.532       1213    82
+#  4 bbc    1     flat  0.553       1218    82
+#  5 bbc    2     ar    0.457       1158    78
+#  6 bbc    2     flat  0.494       1064    72
+#  7 map    0     ar    0.432       2320   164
+#  8 map    0     flat  0.575       2408   165
+#  9 map    1     ar    0.383       1184    80
+# 10 map    1     flat  0.447       1231    83
+# 11 map    2     ar    0.365       1249    84
+# 12 map    2     flat  0.330       1211    82
+# 13 mil    0     ar    0.503       2443   166
+# 14 mil    0     flat  0.572       2521   171
+# 15 mil    1     ar    0.454       1155    79
+# 16 mil    1     flat  0.498       1219    83
+# 17 mil    2     ar    0.465       1300    88
+# 18 mil    2     flat  0.454       1296    88
+# 19 va     0     ar    0.414       2051   160
+# 20 va     0     flat  0.576       1857   144
+# 21 va     1     ar    0.365       1084    84
+# 22 va     1     flat  0.434        963    75
+# 23 va     2     ar    0.341       1002    78
+# 24 va     2     flat  0.349        898    70
+
+
+# below shows that we indeed have 5 non-overlapping experiences per cohort
+combined_data |>
+  ggplot(aes(x=months, y=score, group=media)) +
+    stat_summary(fun=mean, colour="red", geom="line",group=1) +
+  facet_grid(rows=vars(exp_title), cols=vars(cohort))
+
+
+# below shows that in# below shows that in# below shows that indeed months*media pattern common over all experiences
+# helping check no systematic oddities in data
+combined_data |>
+  mutate(
+    exp_title = case_when(
+      exp_title %in% c("ani", "ay", "met", "dre") ~ 'a',
+      exp_title %in% c("dee", "dd", "mus", "shr") ~ 'b',
+      exp_title %in% c("hum", "el", "sku", "the") ~ 'c',
+      exp_title %in% c("lif", "sp", "spa", "tia") ~ 'd',
+      exp_title %in% c("res", "ss", "vic", "va") ~ 'e',
+    )
+  ) |>
+  ggplot(aes(x=months, y=score, group=media, color=media)) +
+  stat_summary(fun=mean, geom="line") +
+  facet_grid(rows=vars(exp_title), cols=vars(cohort))
+
+
+combined_data |>
+  corrr::correlate() |>
+  corrr::rearrange(method = "MDS", absolute = FALSE) %>%
+  corrr::shave() %>% 
+  corrr::rplot(shape = 19, legend = TRUE, print_cor=T)
+# captivated highly correlates with emotion_aws(.67), presence_real(.64), surround (.74) and presenec_beingthere (.73)
+# so excluding from analyses (no real hypotheses from this)
+
+combined_data |>
+  select(-captivated) |>
+  corrr::correlate() |>
+  corrr::rearrange(method = "MDS", absolute = FALSE) %>%
+  corrr::shave() %>% 
+  corrr::rplot(shape = 19, legend = TRUE, print_cor=T)
+# presence_real and presence_beingthere highly correlated (.72)
+# presence_real and surround highly correlated (.66)
+# presence_beingthere and surround highly correlated (77)
+# so averaged into new presence measure
+
+combined_data |>
+  rowwise() |>
+  mutate(presence=mean(c_across(c(presence_beingthere, presence_real, surround)))) |>
+  select(-captivated, -presence_beingthere, -presence_real, -surround) |>
+  corrr::correlate() |>
+  corrr::rearrange(method = "MDS", absolute = FALSE) %>%
+  corrr::shave() %>% 
+  corrr::rplot(shape = 19, legend = TRUE, print_cor=T)
+# presence_real and presence_beingthere highly correlated (.72) so averaged into new presence measure
+# removing surround as highly correlates with others
+
+
+combined_data_cor_screened <- combined_data |>
+  rowwise() |>
+  mutate(presence=mean(c_across(c(presence_beingthere, presence_real, surround)))) |>
+  select(-captivated, -presence_beingthere, -presence_real)
+  
+# presence_real and presence_beingthere highly correlated (.72) so averaged into new presence measure
+
+
+# to help with convergence issues, we center and scale continuous variables
+# https://stackoverflow.com/a/60835439/960471
+
+combined_data_cor_screened <- combined_data_cor_screened |>
+  mutate(
+    enjoy = as.integer(enjoy),
+    age = age, # x10 as above we divide by 10. But scale does the same thing
+    #presence = scale(presence),
+    #knew = scale(knew),
+    #ar_frequency = scale(ar_frequency)
+  )
+  
+
+# checking we have approp number of conditions
+g <- plot_model(fit.model, type = "pred", terms = c("exp_title", "exp_title_question"), pred.type='re', ci.lvl=NA, colors = 'darkgray', show.legend = T, dot.size=3, dodge = 0, alpha=.5)  + theme_minimal() 
+g
+
+
+```
+
+
+
+checking assumptions
+```{r}
+
+tab_model(fit.model)
+performance::check_model(fit.model) 
+
+binned_residuals_outcome <- performance::binned_residuals(fit.model) 
+# Warning: Probably bad model fit. Only about 45% of the residuals are inside the error bounds.
+# AW: implies predictor log transform maybe needed https://easystats.github.io/performance/reference/binned_residuals.html
+plot(binned_residuals_outcome, show_dots = TRUE)
+
+# note that there is argument for more theoretical approach (https://stats.stackexchange.com/questions/99274/interpreting-a-binned-residual-plot-in-logistic-regression) to binned residuals here https://cran.r-project.org/web/packages/DHARMa/vignettes/DHARMa.html
+```
+
+# checking for v poor performing and v high performing questions
+# outcome: only a 4 <.25 and 4ish > .75. Perhaps not that impactful
+```{r}
+combined_data_cor_screened |>
+  group_by(media, exp_title, exp_title_question) |>
+  dplyr::summarize(mean_over_time = mean(score),
+                   datapoints= n(), 
+                   SJs=n_distinct(id), 
+                   ) |> 
+  filter(mean_over_time <= .25 | mean_over_time >= .75) |>
+  #arrange(desc(mean_over_time)) |>
+  ggplot(aes(x=reorder(exp_title_question, mean_over_time),y=mean_over_time, fill=media)) + geom_bar(stat="identity", position=position_dodge()) 
+```
+
+
+
+
+```{r}
+
+##### one analalysed with gap
+
+combined_new <- combined_data_cor_screened |>
+  mutate(
+    time = case_when(
+          months == "t0" ~ "t0",
+          months == "t1" ~ "t1",
+          months == "t2" ~ "t1"
+        ),
+    time = factor(time),
+    gap = factor(gap, levels=c(0,1), labels=c("1m", "6m"))
+  ) 
+
+fit.mod1 <-glmer(formula = score ~ 1 + media * time * gap +  (1  | cohort / exp_title / exp_title_question) + (1 + time | id) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum, time=contr.sum, gap=contr.sum), data=combined_new)
+# age + presence  + knew + ar_frequency
+
+
+fit.mod2 <-glmer(formula = score ~ 1 + media * time * gap + (1 + time | id) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum, time=contr.sum, gap=contr.sum), data=combined_new)
+
+
+
+##### double analysis with t1 vs t2
+
+fit.t1 <- combined_data_cor_screened |>
+  filter(
+    months != "t2"
+  ) |>
+  glmer(formula = score ~ 1 + months * media   +  (1  | cohort / exp_title / exp_title_question) + (1 | id) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum))
+
+
+fit.t2 <- combined_data_cor_screened |>
+  filter(
+    months != "t1"
+  ) |>
+  glmer(formula = score ~ 1 + months * media +  (1  | cohort / exp_title / exp_title_question) + (1  | id) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum))
+
+emmeans(fit.t1, pairwise~media|months, type='response')
+emmeans(fit.t2, pairwise~media|months, type='response')
+
+plot_model(fit.t1, type='int')
+plot_model(fit.t2, type='int')
+
+##### repeat t2 analysis with tripple incl. cohort 
+
+fit.t.t2_split <- combined_data_cor_screened |>
+  filter(
+    months != "t1"
+  ) |>
+  glmer(formula = score ~ 1 + months * media * cohort + (1  | id) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum))
+
+emmeans(fit.t.t2_split, pairwise~media|months|cohort, type='response')
+plot_model(fit.t.t2_split, type='int')
+
+##### without cohort nesting & compare 
+
+fit.t1.v2 <- combined_data_cor_screened |>
+  filter(
+    months != "t2"
+  ) |>
+  glmer(formula = score ~ 1 + months * media   +  (1 | id) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum))
+
+
+fit.t2.v2 <- combined_data_cor_screened |>
+  filter(
+    months != "t1"
+  ) |>
+  glmer(formula = score ~ 1 + months * media + (1  | id) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum))
+
+anova(fit.t1, fit.t1.v2)
+anova(fit.t2, fit.t2.v2)
+
+##### with other covariates
+fit.t1.cov <- combined_data_cor_screened |>
+  filter(
+    months != "t2"
+  ) |>
+  glmer(formula = score ~ 1 + months * media  + age + presence  + knew + ar_frequency +  (1 | id) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum))
+
+
+fit.t2.cov <- combined_data_cor_screened |>
+  filter(
+    months != "t1"
+  ) |>
+  glmer(formula = score ~ 1 + months * media + age + presence  + knew + ar_frequency + (1  | id) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum))
+
+##### because 'knew' is the predictor, shall we exclude people with super high 'knew'?
+
+#####
+fit.full <- glmer(score ~ 1 + age + presence  + knew + media * months  + media * ar_frequency +  (1  | exp_title / exp_title_question) + (1 | cohort / id)  ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), data=combined_data_cor_screened, contrasts = list(media = contr.sum, months=contr.sum))
+
+# below, removing ar_frequency
+fit.no_ar_frequency_int <- glmer(score ~ 1 + age + presence + enjoy + knew + media * months + media + ar_frequency + (1  | exp_title / exp_title_question) + (1 | cohort / id)  ,  family = binomial("logit"), data=combined_data_cor_screened, nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum, months=contr.sum))
+
+anova(fit.full, fit.no_ar_frequency)
+
+fit.no_months_int <- glmer(score ~ 1 + age + presence + enjoy + knew + media +  months + media + ar_frequency + (1  | exp_title / exp_title_question) + (1 | cohort / id)  ,  family = binomial("logit"), data=combined_data_cor_screened, nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum, months=contr.sum))
+
+anova(fit.full, fit.no_months_int)
+
+e1 = emmeans(fit.full, pairwise~media|months, adjust = "sidak", type='response' )
+confint(e1, adjust = "sidak", level = 0.99)
+# months = t0:
+#  contrast  odds.ratio     SE  df null z.ratio p.value asymp.LCL asymp.UCL
+#  ar / flat      0.603 0.0285 Inf    1 -10.712  <.0001 0.534     0.681
+# 
+# months = t1:
+#  contrast  odds.ratio     SE  df null z.ratio p.value asymp.LCL asymp.UCL
+#  ar / flat      0.807 0.0504 Inf    1  -3.440  0.0006     0.687     0.947
+# 
+# months = t2:
+#  contrast  odds.ratio     SE  df null z.ratio p.value asymp.LCL asymp.UCL
+#  ar / flat      0.989 0.0625 Inf    1  -0.168  0.8667     0.841     1.164
+
+
+e2 = emmeans(fit.full, pairwise~media|ar_frequency, adjust = "sidak", type='response' )
+confint(e2, adjust = "sidak", level = 0.99)
+
+
+
+# below, combining advice from stackexchange, as well as some more predictors
+
+fit.mod1 <-glmer(formula = score ~ 1 + age + ar_frequency + presence + knew + media * time * gap +  (1  | exp_title / exp_title_question) + (1 | cohort / id) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum, time=contr.sum, gap=contr.sum), data=combined_new)
+
+### chekcing the impact of using : (where we dont nest but just )
+
+fit.mod2 <-glmer(formula = score ~ 1 + age + ar_frequency + presence + knew + media * time * gap +  (1  | exp_title_question : exp_title) + (1 | id : cohort) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum, time=contr.sum, gap=contr.sum), data=combined_new)
+
+### moving cohort out of random factors
+
+fit.mod2 <-glmer(formula = score ~ 1 + age + ar_frequency + presence + knew + media * time * gap * cohort +  (1  | exp_title_question : exp_title) + (1 | id ) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum, time=contr.sum, gap=contr.sum), data=combined_new)
+
+###### Marginal R2 / Conditional R2	0.030 / 0.254	0.051 / 0.257
+###### note how we shift from conditional r2 to marginal r2, as expected
+
+fit.mod2 <-glmer(formula = score ~ 1 + age + ar_frequency + presence + knew + media * time * gap * cohort +  (1  | exp_title_question : exp_title) + (1 | id ) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum, time=contr.sum, gap=contr.sum), data=combined_new)
+
+### moving exp_title out of random factors
+
+fit.mod2 <-glmer(formula = score ~ 1 + age + ar_frequency + presence + knew + media * time * gap * cohort * exp_title +   + (1 | id ) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum, time=contr.sum, gap=contr.sum), data=combined_new)
+
+###### Marginal R2 / Conditional R2	0.030 / 0.254	0.109 / 0.176
+###### model fails to converge well but note the additional shift from conditional to marginal!!
+```
+
+# constructing combined measure that collapses exp_title_question
+```{r}
+count_combine <-combined_new |>
+    group_by(media, months, exp_title, id, gap) |>
+  dplyr::summarize(media, months, exp_title, id, time, av_score = sum(score), n=n(), gap, cohort) |>
+  unique() |>
+  filter(n==3) |>
+  mutate(
+    time = case_when(
+          months == "t0" ~ "t0",
+          months == "t1" ~ "t1",
+          months == "t2" ~ "t1"
+        ),
+    time = factor(time),
+    id = factor(id),
+    cohort = factor(cohort)
+  ) 
+
+count_combine |>
+  arrange(desc(id))  |> print(n=24)
+
+# nb counts 10370 / 11307 when we  have /no-not-have that filter
+
+# Poisson or negative binomial regression
+
+count_m1 <- glmer(formula = av_score ~ 1 + media * time * gap + (1 | id), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum, time=contr.sum, gap=contr.sum), data=count_combine, family = "poisson")
+count_m2 <- glmer(formula = av_score ~ 1 + media * time * gap + (1 | cohort / id), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum, time=contr.sum, gap=contr.sum), data=count_combine, family = "poisson")
+
+
+
+plot_model(count_m1, type='int')
+
+```
+
+
+
+delay models via log
+```{r}
+fit.log <- combined_data_cor_screened |>
+  mutate(weeks = (days+1)/7) |>
+  glmer(formula = score ~ 1 + age + ar_frequency + presence + knew + media * log(weeks) + (1  | exp_title / exp_title_question) + (1 | cohort / id)  ,  family = binomial, nAGQ=0, control=glmerControl(optimizer = "nloptwrap"))
+plot_model(fit.log, type = "pred", terms = c("weeks[all]", "media"), pred.type='re', colors = 'darkgray', show.legend = T, dot.size=3, dodge = 0, alpha=.5)  + theme_minimal()
+
+fit.log <- combined_data_cor_screened |>
+  mutate(weeks = (days+1)/7) |>
+  glmer(formula = score ~ 1 + age + ar_frequency + media*presence + knew + media * log(weeks) + (1  | exp_title / exp_title_question) + (1 | cohort / id)  ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"))
+
+ggplot(fit.log, aes(x=log(weeks), y=score)) + geom_point() +
+  geom_smooth(method='lm')
+```
+
+
+plotting
+```{r}
+
+plot_model(fit.model, type = "pred", terms = c("months", "media"), ) #+ 
+  #geom_line() + 
+  #theme_minimal() + scale_x_continuous(aes(x=aw_mod(months)))
+                   
+                
+
+plot <- combined_data_cor_screened |>
+  mutate(months = str_remove(months, "t")) |>
+  mutate(months = case_when(months=="0" ~ 0,
+                            months=="1" ~ 1,
+                            months=="2" ~ 7.5)) |>
+  ggplot(aes(x=months, y=score, color=media)) +
+ stat_summary(geom = "errorbar", fun.data = ~mean_se(., mult = 1.96), linewidth =1, width=.5) + 
+    stat_summary(fun.y = mean, geom="line",  linewidth=1) +
+  geom_rug(aes(y=score, x=days/30)) +
+  geom_hline(yintercept=.25, linetype="dashed") + 
+  theme(text=element_text(size=14))
+
+
+
+plot |>
+ggsave(filename='interaction.png',width=7.5, height=6.5, bg='white')
+
+
+
+facet_plot <- combined_data_cor_screened |>
+  mutate(
+    cell_title = exp_title,
+    exp_title = case_when(
+      exp_title %in% c("res", "ay", "sku", "tia") ~ 'a',
+      exp_title %in% c("hum", "dd", "met", "va") ~ 'b',
+      exp_title %in% c("ani", "sp", "spa", "dre") ~ 'c',
+      exp_title %in% c("lif", "ss", "mus", "shr") ~ 'd',
+      exp_title %in% c("dee", "el", "vic", "the") ~ 'e',
+    ),
+    cohort = factor(cohort,  levels=c("mil","map","bbc", 'va'))
+  ) |>
+  ggplot(aes(x=months, y=score, group=media, color=media)) +
+  stat_summary(fun=mean, geom="line") +
+  geom_hline(yintercept=.25, linetype="dashed") + 
+  facet_grid(rows=vars(exp_title), cols=vars(cohort)) +  theme(strip.text.y = element_blank())
+facet_plot
+
+
+titles <- c("res", "ay", "sku", "tia", "hum", "dd", "met", "va", "ani", "sp", "spa", "dre", "lif", "ss", "mus", "shr","dee", "el", "vic", "the")
+  tag_facet(facet_plot, tag_pool = titles,
+          open = "", close = "", y= 0.28, x = 1.75, hjust=0,
+          size = 4,
+          ) + theme(strip.text = element_text())
+
+
+
+```
+
+
+
+presence
+```{r}
+
+
+ combined_data_cor_screened_presence <- combined_data_cor_screened |>
+  filter(days==0) |>
+  mutate(exp_title_question = substr(exp_title_question, nchar(exp_title_question), nchar(exp_title_question))) |>
+  filter(exp_title_question == 1) 
+
+# note that we dropped the cohort random factor as the second model failed to converge
+fit.presence <- combined_data_cor_screened_presence |> lmer(formula = presence ~ 1 + age + media + media * ar_frequency +  (1  | exp_title ) + (1 |  id), contrasts = list(media = contr.sum))
+
+fit.presence_no_interaction <- combined_data_cor_screened_presence |> lmer(formula = presence ~ 1 + age + media + ar_frequency +  (1  | exp_title ) + (1 |  id), contrasts = list(media = contr.sum))
+
+anova(fit.presence, fit.presence_no_interaction)
+
+
+fit.presence_regdummy <- combined_data_cor_screened_presence |> lmer(formula = presence ~ 1 + age + media + media * ar_frequency +  (1  | exp_title ) + (1 |  id),)
+
+fit.presence_no_interaction_regdummy <- combined_data_cor_screened_presence |> lmer(formula = presence ~ 1 + age + media + ar_frequency +  (1  | exp_title ) + (1 |  id))
+
+
+# Data: combined_data_cor_screened_presence
+# Models:
+# fit.presence_no_interaction: presence ~ 1 + age + media + ar_frequency + (1 | exp_title) + (1 | id)
+# fit.presence: presence ~ 1 + age + media + media * ar_frequency + (1 | exp_title) + (1 | id)
+#                             npar   AIC   BIC  logLik deviance  Chisq Df Pr(>Chisq)
+# fit.presence_no_interaction    7 13406 13452 -6695.9    13392                     
+# fit.presence                   8 13407 13460 -6695.5    13391 0.8032  1     0.3701
+
+tab_model(fit.presence_regdummy)
+
+palette <- viridis(n = 2)
+
+arfreq_plot <- combined_data_cor_screened_presence |>
+  mutate(ar_frequency = factor(ar_frequency)) |>
+  ggplot(aes(x=ar_frequency, y=presence)) +
+    scale_x_discrete(labels=c("Never", "less than once a month", "About once a month", "Several times a month",  "A few times a week", "About daily"), limits=c("0", "1", "2", "3", "4", "5")) +
+  geom_violin(trim=T, fill=palette[1], alpha=.35, ) +
+    geom_jitter(alpha=.3, color='black', shape=21, size=1,  fill="white") + 
+ stat_summary(fun = "mean", shape=21, size=.5, color='black', fill="black") +
+  stat_summary(fun.data=mean_cl_normal, 
+                 geom="errorbar", width=.2,  linewidth=1, color='black')+
+    labs(x = "In the past 12 months, how frequently have you used AR filters?",
+       y = "Presence") +
+  theme(text=element_text(size=14),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + theme_minimal() +
+  coord_flip()
+
+media_plot <- combined_data_cor_screened_presence |>
+  ggplot(aes(x=media, y=presence)) +
+   scale_x_discrete(labels=c("AR", "Flat"), limits=c("ar", "flat")) +
+  geom_violin(trim=T, fill=palette[2], alpha=.35 ) +
+   geom_jitter(alpha=.3, color='black', shape=21, size=1,  fill="white") + 
+ stat_summary(fun = "mean", shape=21, size=.5, color='black', fill="black") +
+  stat_summary(fun.data=mean_cl_normal, 
+                 geom="errorbar", width=.2,  linewidth=1, color='black', fill='black')+
+      labs(x = "Media", y = "Presence") +
+  theme(text=element_text(size=14)) + theme_minimal() +
+    coord_flip()
+
+graph_combined <- (media_plot / arfreq_plot) + plot_layout(axes  = 'collect', )
+  
+print(graph_combined)
+
+graph_combined |> ggplot2::ggsave(filename='presence_graph_combined.png',width=19.0, units='cm')
+
+```
+
+
+enjoy
+```{r}
+
+combined_data_cor_screened_presence |>
+  mutate(ar_frequency = as.integer(ar_frequency)) |>
+  select(enjoy, age,media, ar_frequency) |>
+  corrr::correlate() |>
+  corrr::rearrange(method = "MDS", absolute = FALSE) %>%
+  corrr::shave() %>% 
+  corrr::rplot(shape = 19, legend = TRUE, print_cor=T)
+
+
+# note that we dropped the cohort random factor as the second model failed to converge
+fit.enjoy <- combined_data_cor_screened_presence |> lmer(formula = enjoy ~ 1 + age + media* ar_frequency +  (1  | exp_title ) + (1 | id), contrasts = list(media = contr.sum))
+
+fit.enjoy_no_interaction <- combined_data_cor_screened_presence |> lmer(formula = enjoy ~ 1 + age + media + ar_frequency +  (1  | exp_title ) + (1 |   id), contrasts = list(media = contr.sum))
+
+anova(fit.enjoy, fit.enjoy_no_interaction)
+
+# fit.enjoy_no_interaction: enjoy ~ 1 + age + media + ar_frequency + (1 | exp_title) + (1 | id)
+# fit.enjoy: enjoy ~ 1 + age + media * ar_frequency + (1 | exp_title) + (1 | id)
+#                          npar   AIC   BIC  logLik deviance  Chisq Df Pr(>Chisq)
+# fit.enjoy_no_interaction    7 16868 16914 -8426.8    16854                     
+# fit.enjoy                   8 16868 16921 -8426.0    16852 1.6202  1     0.2031
+
+tab_model(fit.enjoy_no_interaction)
+
+palette <- viridis(n = 2)
+
+arfreq_plot <- combined_data_cor_screened_presence |>
+  mutate(ar_frequency = factor(ar_frequency)) |>
+  ggplot(aes(x=ar_frequency, y=enjoy)) +
+    scale_x_discrete(labels=c("Never", "less than once a month", "About once a month", "Several times a month",  "A few times a week", "About daily"), limits=c("0", "1", "2", "3", "4", "5")) +
+  geom_violin(trim=T, fill=palette[1], alpha=.35, adjust=3  ) +
+    geom_jitter(alpha=.3, color='black', shape=21, size=1,  fill="white") + 
+ stat_summary(fun = "mean", shape=21, size=.5, color='black', fill="black") +
+  stat_summary(fun.data=mean_cl_normal, 
+                 geom="errorbar", width=.2,  linewidth=1, color='black')+
+    labs(x = "In the past 12 months, how frequently have you used AR filters?",
+       y = "Enjoyment") +
+  theme(text=element_text(size=14),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + theme_minimal() +
+  coord_flip()
+
+media_plot <- combined_data_cor_screened_presence |>
+  ggplot(aes(x=media, y=enjoy)) +
+   scale_x_discrete(labels=c("AR", "Flat"), limits=c("ar", "flat")) +
+  geom_violin(trim=T, fill=palette[2], alpha=.35, adjust=3 ) +
+   geom_jitter(alpha=.3, color='black', shape=21, size=1,  fill="white") + 
+ stat_summary(fun = "mean", shape=21, size=.5, color='black', fill="black") +
+  stat_summary(fun.data=mean_cl_normal, 
+                 geom="errorbar", width=.2,  linewidth=1, color='black', fill='black')+
+      labs(x = "Media", y = "Enjoyment") +
+  theme(text=element_text(size=14)) + theme_minimal() +
+    coord_flip()
+
+graph_combined <- (media_plot / arfreq_plot) + plot_layout(axes  = 'collect', )
+  
+print(graph_combined)
+
+graph_combined |> ggplot2::ggsave(filename='enjoy_graph_combined.png',width=19.0, units='cm')
+
+```
+
