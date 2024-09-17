@@ -514,187 +514,78 @@ combined_new <- combined_data_cor_screened |>
     gap = factor(gap, levels=c(0,1), labels=c("1m", "6m"))
   ) 
 
-fit.mod1 <-glmer(formula = score ~ 1 + media * time * gap +  (1  | cohort / exp_title / exp_title_question) + (1 + time | id) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum, time=contr.sum, gap=contr.sum), data=combined_new)
-# age + presence  + knew + ar_frequency
-
-
-fit.mod2 <-glmer(formula = score ~ 1 + media * time * gap + (1 + time | id) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum, time=contr.sum, gap=contr.sum), data=combined_new)
-
-
-
-##### double analysis with t1 vs t2
-
-fit.t1 <- combined_data_cor_screened |>
-  filter(
-    months != "t2"
-  ) |>
-  glmer(formula = score ~ 1 + months * media   +  (1  | cohort / exp_title / exp_title_question) + (1 | id) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum))
-
-
-fit.t2 <- combined_data_cor_screened |>
-  filter(
-    months != "t1"
-  ) |>
-  glmer(formula = score ~ 1 + months * media +  (1  | cohort / exp_title / exp_title_question) + (1  | id) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum))
-
-emmeans(fit.t1, pairwise~media|months, type='response')
-emmeans(fit.t2, pairwise~media|months, type='response')
-
-plot_model(fit.t1, type='int')
-plot_model(fit.t2, type='int')
-
-##### repeat t2 analysis with tripple incl. cohort 
-
-fit.t.t2_split <- combined_data_cor_screened |>
-  filter(
-    months != "t1"
-  ) |>
-  glmer(formula = score ~ 1 + months * media * cohort + (1  | id) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum))
-
-emmeans(fit.t.t2_split, pairwise~media|months|cohort, type='response')
-plot_model(fit.t.t2_split, type='int')
-
-##### without cohort nesting & compare 
-
-fit.t1.v2 <- combined_data_cor_screened |>
-  filter(
-    months != "t2"
-  ) |>
-  glmer(formula = score ~ 1 + months * media   +  (1 | id) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum))
-
-
-fit.t2.v2 <- combined_data_cor_screened |>
-  filter(
-    months != "t1"
-  ) |>
-  glmer(formula = score ~ 1 + months * media + (1  | id) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum))
-
-anova(fit.t1, fit.t1.v2)
-anova(fit.t2, fit.t2.v2)
-
-##### with other covariates
-fit.t1.cov <- combined_data_cor_screened |>
-  filter(
-    months != "t2"
-  ) |>
-  glmer(formula = score ~ 1 + months * media  + age + presence  + knew + ar_frequency +  (1 | id) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum))
-
-
-fit.t2.cov <- combined_data_cor_screened |>
-  filter(
-    months != "t1"
-  ) |>
-  glmer(formula = score ~ 1 + months * media + age + presence  + knew + ar_frequency + (1  | id) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum))
-
-##### because 'knew' is the predictor, shall we exclude people with super high 'knew'?
-
-#####
-fit.full <- glmer(score ~ 1 + age + presence  + knew + media * months  + media * ar_frequency +  (1  | exp_title / exp_title_question) + (1 | cohort / id)  ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), data=combined_data_cor_screened, contrasts = list(media = contr.sum, months=contr.sum))
-
-# below, removing ar_frequency
-fit.no_ar_frequency_int <- glmer(score ~ 1 + age + presence + enjoy + knew + media * months + media + ar_frequency + (1  | exp_title / exp_title_question) + (1 | cohort / id)  ,  family = binomial("logit"), data=combined_data_cor_screened, nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum, months=contr.sum))
-
-anova(fit.full, fit.no_ar_frequency)
-
-fit.no_months_int <- glmer(score ~ 1 + age + presence + enjoy + knew + media +  months + media + ar_frequency + (1  | exp_title / exp_title_question) + (1 | cohort / id)  ,  family = binomial("logit"), data=combined_data_cor_screened, nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum, months=contr.sum))
-
-anova(fit.full, fit.no_months_int)
-
-e1 = emmeans(fit.full, pairwise~media|months, adjust = "sidak", type='response' )
-confint(e1, adjust = "sidak", level = 0.99)
-# months = t0:
-#  contrast  odds.ratio     SE  df null z.ratio p.value asymp.LCL asymp.UCL
-#  ar / flat      0.603 0.0285 Inf    1 -10.712  <.0001 0.534     0.681
-# 
-# months = t1:
-#  contrast  odds.ratio     SE  df null z.ratio p.value asymp.LCL asymp.UCL
-#  ar / flat      0.807 0.0504 Inf    1  -3.440  0.0006     0.687     0.947
-# 
-# months = t2:
-#  contrast  odds.ratio     SE  df null z.ratio p.value asymp.LCL asymp.UCL
-#  ar / flat      0.989 0.0625 Inf    1  -0.168  0.8667     0.841     1.164
-
-
-e2 = emmeans(fit.full, pairwise~media|ar_frequency, adjust = "sidak", type='response' )
-confint(e2, adjust = "sidak", level = 0.99)
-
 
 
 # below, combining advice from stackexchange, as well as some more predictors
 
 fit.mod1 <-glmer(formula = score ~ 1 + age + ar_frequency + presence + knew + media * time * gap +  (1  | exp_title / exp_title_question) + (1 | cohort / id) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum, time=contr.sum, gap=contr.sum), data=combined_new)
 
-### chekcing the impact of using : (where we dont nest but just )
+emm <- emmeans(fit.mod1, ~media*gap*time, type='response' )
 
-fit.mod2 <-glmer(formula = score ~ 1 + age + ar_frequency + presence + knew + media * time * gap +  (1  | exp_title_question : exp_title) + (1 | id : cohort) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum, time=contr.sum, gap=contr.sum), data=combined_new)
+contrasts_list <- list(
+  "At 9 months, media differs"         = c(0, 0, -1, 1, 0, 0, 0, 0),  # Compare media at time1 + gapB
+  "At 3 months, media differs"         = c(-1, 1, 0, 0, 0, 0, 0, 0),  # Compare media at time1 + gapA
+  
+    "CHECK_AR_time0_gapA_vs_gapB"            = c(0, 0, 0, 0, 1, 0, -1, 0),  # Compare AR at time0 + gapA vs. time0 + gapB
+  "CHECK_Video_time0_gapA_vs_gapB"         = c(0, 0, 0, 0, 0, 1, 0, -1),   # Compare Video at time0 + gapA vs. time0 + gapB
+  "At 0 months, media differs"              = c(0, 0, 0, 0, -1, 1, -1, 1), # Compare media at time0 (across gapA and gapB)
 
-### moving cohort out of random factors
+   "AR_time0_vs_time1_gapA"           = c(-1, 0, 0, 0, 1, 0, 0, 0),  # Compare AR at time0 + gapA vs. AR at time1 + gapA
+  "AR_time1_gapA_vs_time1_gapB"      = c(1, 0, -1, 0, 0, 0, 0, 0),  # Compare AR at time1 + gapA vs. AR at time1 + gapB
+  "Video_time0_vs_time1_gapA"        = c(0, -1, 0, 0, 0, 1, 0, 0),  # Compare Video at time0 + gapA vs. Video at time1 + gapA
+  "Video_time1_gapA_vs_time1_gapB"   = c(0, 1, 0, -1, 0, 0, 0, 0)  # Compare Video at time1 + gapA vs. Video at time1 + gapB
 
-fit.mod2 <-glmer(formula = score ~ 1 + age + ar_frequency + presence + knew + media * time * gap * cohort +  (1  | exp_title_question : exp_title) + (1 | id ) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum, time=contr.sum, gap=contr.sum), data=combined_new)
+)
+my_contrasts <- contrast(emm, contrasts_list)
+summary(my_contrasts, adjust = "sidak")
 
-###### Marginal R2 / Conditional R2	0.030 / 0.254	0.051 / 0.257
-###### note how we shift from conditional r2 to marginal r2, as expected
+ # contrast                       odds.ratio     SE  df null z.ratio p.value
+ # At 9 months, media differs          1.006 0.0674 Inf    1   0.089  1.0000
+ # At 3 months, media differs          1.245 0.0823 Inf    1   3.319  0.0081
+ # CHECK_AR_time0_gapA_vs_gapB         0.993 0.0660 Inf    1  -0.103  1.0000
+ # CHECK_Video_time0_gapA_vs_gapB      1.014 0.0675 Inf    1   0.203  1.0000
+ # At 0 months, media differs          2.747 0.2593 Inf    1  10.700  <.0001
+ # AR_time0_vs_time1_gapA              1.317 0.0648 Inf    1   5.594  <.0001
+ # AR_time1_gapA_vs_time1_gapB         1.135 0.0757 Inf    1   1.895  0.4162
+ # Video_time0_vs_time1_gapA           1.770 0.0845 Inf    1  11.969  <.0001
+ # Video_time1_gapA_vs_time1_gapB      1.405 0.0930 Inf    1   5.133  <.0001
+# P value adjustment: sidak method for 9 tests 
 
-fit.mod2 <-glmer(formula = score ~ 1 + age + ar_frequency + presence + knew + media * time * gap * cohort +  (1  | exp_title_question : exp_title) + (1 | id ) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum, time=contr.sum, gap=contr.sum), data=combined_new)
+  # see how odds.ratio and z.ratio below is identical to above (except for combo tests above)
+emmeans(fit.mod1, pairwise~media*gap*time, type='response', adjust = "none")
 
-### moving exp_title out of random factors
+ # contrast                odds.ratio     SE  df null z.ratio p.value
+ # ar 1m t1 / flat 1m t1        0.803 0.0531 Inf    1  -3.319  0.0009 ***********IMPORTANT
+ # ar 1m t1 / ar 6m t1          1.135 0.0757 Inf    1   1.895  0.0580 ** AR IMPORTANT
+ # ar 1m t1 / flat 6m t1        1.128 0.0759 Inf    1   1.791  0.0733
+ # ar 1m t1 / ar 1m t0          0.759 0.0374 Inf    1  -5.594  <.0001 ** AR IMPORTANT
+ # ar 1m t1 / flat 1m t0        0.454 0.0302 Inf    1 -11.889  <.0001
+ # ar 1m t1 / ar 6m t0          0.754 0.0502 Inf    1  -4.241  <.0001
+ # ar 1m t1 / flat 6m t0        0.460 0.0310 Inf    1 -11.531  <.0001
+ # flat 1m t1 / ar 6m t1        1.413 0.0930 Inf    1   5.253  <.0001 ** FLAT IMPORTANT
+ # flat 1m t1 / flat 6m t1      1.405 0.0930 Inf    1   5.133  <.0001
+ # flat 1m t1 / ar 1m t0        0.946 0.0624 Inf    1  -0.845  0.3978
+ # flat 1m t1 / flat 1m t0      0.565 0.0270 Inf    1 -11.969  <.0001 ** FLAT IMPORTANT
+ # flat 1m t1 / ar 6m t0        0.939 0.0616 Inf    1  -0.955  0.3396
+ # flat 1m t1 / flat 6m t0      0.573 0.0380 Inf    1  -8.409  <.0001
+ # ar 6m t1 / flat 6m t1        0.994 0.0666 Inf    1  -0.089  0.9292 ***********IMPORTANT
+ # ar 6m t1 / ar 1m t0          0.669 0.0446 Inf    1  -6.027  <.0001
+ # ar 6m t1 / flat 1m t0        0.400 0.0265 Inf    1 -13.844  <.0001
+ # ar 6m t1 / ar 6m t0          0.665 0.0323 Inf    1  -8.415  <.0001
+ # ar 6m t1 / flat 6m t0        0.405 0.0272 Inf    1 -13.452  <.0001
+ # flat 6m t1 / ar 1m t0        0.673 0.0452 Inf    1  -5.889  <.0001
+ # flat 6m t1 / flat 1m t0      0.402 0.0268 Inf    1 -13.678  <.0001
+ # flat 6m t1 / ar 6m t0        0.669 0.0447 Inf    1  -6.023  <.0001
+ # flat 6m t1 / flat 6m t0      0.408 0.0201 Inf    1 -18.220  <.0001
+ # ar 1m t0 / flat 1m t0        0.597 0.0397 Inf    1  -7.762  <.0001 ***********IMPORTANT
+ # ar 1m t0 / ar 6m t0          0.993 0.0660 Inf    1  -0.103  0.9178
+ # ar 1m t0 / flat 6m t0        0.605 0.0407 Inf    1  -7.459  <.0001
+ # flat 1m t0 / ar 6m t0        1.663 0.1098 Inf    1   7.704  <.0001
+ # flat 1m t0 / flat 6m t0      1.014 0.0675 Inf    1   0.203  0.8391 ***********IMPORTANT
+ # ar 6m t0 / flat 6m t0        0.610 0.0408 Inf    1  -7.396  <.0001
 
-fit.mod2 <-glmer(formula = score ~ 1 + age + ar_frequency + presence + knew + media * time * gap * cohort * exp_title +   + (1 | id ) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum, time=contr.sum, gap=contr.sum), data=combined_new)
-
-###### Marginal R2 / Conditional R2	0.030 / 0.254	0.109 / 0.176
-###### model fails to converge well but note the additional shift from conditional to marginal!!
 ```
 
-# constructing combined measure that collapses exp_title_question
-```{r}
-count_combine <-combined_new |>
-    group_by(media, months, exp_title, id, gap) |>
-  dplyr::summarize(media, months, exp_title, id, time, av_score = sum(score), n=n(), gap, cohort) |>
-  unique() |>
-  filter(n==3) |>
-  mutate(
-    time = case_when(
-          months == "t0" ~ "t0",
-          months == "t1" ~ "t1",
-          months == "t2" ~ "t1"
-        ),
-    time = factor(time),
-    id = factor(id),
-    cohort = factor(cohort)
-  ) 
-
-count_combine |>
-  arrange(desc(id))  |> print(n=24)
-
-# nb counts 10370 / 11307 when we  have /no-not-have that filter
-
-# Poisson or negative binomial regression
-
-count_m1 <- glmer(formula = av_score ~ 1 + media * time * gap + (1 | id), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum, time=contr.sum, gap=contr.sum), data=count_combine, family = "poisson")
-count_m2 <- glmer(formula = av_score ~ 1 + media * time * gap + (1 | cohort / id), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum, time=contr.sum, gap=contr.sum), data=count_combine, family = "poisson")
-
-
-
-plot_model(count_m1, type='int')
-
-```
-
-
-
-delay models via log
-```{r}
-fit.log <- combined_data_cor_screened |>
-  mutate(weeks = (days+1)/7) |>
-  glmer(formula = score ~ 1 + age + ar_frequency + presence + knew + media * log(weeks) + (1  | exp_title / exp_title_question) + (1 | cohort / id)  ,  family = binomial, nAGQ=0, control=glmerControl(optimizer = "nloptwrap"))
-plot_model(fit.log, type = "pred", terms = c("weeks[all]", "media"), pred.type='re', colors = 'darkgray', show.legend = T, dot.size=3, dodge = 0, alpha=.5)  + theme_minimal()
-
-fit.log <- combined_data_cor_screened |>
-  mutate(weeks = (days+1)/7) |>
-  glmer(formula = score ~ 1 + age + ar_frequency + media*presence + knew + media * log(weeks) + (1  | exp_title / exp_title_question) + (1 | cohort / id)  ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"))
-
-ggplot(fit.log, aes(x=log(weeks), y=score)) + geom_point() +
-  geom_smooth(method='lm')
-```
 
 
 plotting
