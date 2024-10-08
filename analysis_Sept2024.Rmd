@@ -58,6 +58,13 @@ library(corrr)
 
 ```
 
+control data csv
+```{r}
+control_data <- tibble(read.csv("instagram_control_n100.csv"))
+
+```
+
+
 
 load csv
 ```{r}
@@ -152,6 +159,7 @@ load_data_per_cohort <-
         date_of_test2 = parse_datetime(X1monthlater_created),
         date_of_test1 = parse_datetime(created),
         days =  as.integer(difftime(date_of_test2, date_of_test1)),
+        no_followup=is.na(days),
         days = if_else(is.na(days), 0, days),
         media = case_when(
           str_detect(study_name, '_FLAT') ~ 'flat',
@@ -203,7 +211,7 @@ load_data_per_cohort <-
         ) |>
       filter(user_at_start=="AnonymousUser") |>
       dplyr::select(date_of_test2, date_of_test1, days, media, duration_seconds, unique_sj_id,  age, ar_frequency,  study_name, cohort, exp_title_question, score, exp_title, enjoy, 
-                    knew, surround, captivated, presence_beingthere, emotion_awe, emotion_boredom, presence_real, gap)
+                    knew, surround, captivated, presence_beingthere, emotion_awe, emotion_boredom, presence_real, gap, no_followup)
       
     return(combined)
   }
@@ -499,6 +507,19 @@ combined_data_cor_screened |>
 
 
 
+
+# Combining advice from https://stats.stackexchange.com/, as well as some more predictors
+
+https://stats.stackexchange.com/questions/653787/model-specification-for-causal-inference-with-longitudinal-data-and-multilevel-m/654298#654298
+
+Why are we using binary regression and not CLM? We were advised:
+'The simplest case is to treat correctness of an answer to each question as a binary correct, forming 15 rows for each id in a wave of study. This is appropriate if selection of the other two options offers no additional information. This approach requires a mixed-effect binary logit model. See lme4::glmer() and glmmTMB::glmmTMB().'
+AW: I have gone with above approach as indeed, two other options offer no additional information
+
+Why is there (1| exp_title : exp_title_question) in fit.followup? This is not specified in stats.stackexchange.com
+AW: We are using the 'simplest case' (see prev answer). We have not collapsed exp_title_question and so need to account for it
+
+
 ```{r}
 
 ##### one analalysed with gap
@@ -511,14 +532,75 @@ combined_new <- combined_data_cor_screened |>
           months == "t2" ~ "t1"
         ),
     time = factor(time),
-    gap = factor(gap, levels=c(0,1), labels=c("1m", "6m"))
+    gap = factor(gap, levels=c(0,1), labels=c("1m", "6m")),
+    no_followup = factor(no_followup)
   ) 
 
+combined_new |>
+  filter(days==0) |>
+  group_by(media, exp_title, exp_title_question, no_followup) |>
+  dplyr::summarize(
+                   datapoints= n(), 
+                   )
+
+fit.initial <- combined_new |>
+  filter(days==0) |>
+                glmer(formula = score ~ 1 + age + ar_frequency + presence + knew + media * cohort * no_followup
+                     + (1| exp_title : exp_title_question),  
+                      family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"))
+# note removed  +  (1  | cohort : exp_title) + (1 | cohort : id)  as did not converge
 
 
-# below, combining advice from stackexchange, as well as some more predictors
 
-fit.mod1 <-glmer(formula = score ~ 1 + age + ar_frequency + presence + knew + media * time * gap +  (1  | exp_title / exp_title_question) + (1 | cohort / id) ,  family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), contrasts = list(media = contr.sum, time=contr.sum, gap=contr.sum), data=combined_new)
+emms <- emmeans(fit.initial, ~ media * cohort * no_followup)
+contrast_results <- contrast(emms, interaction = "pairwise", by = c("media", "cohort"))
+# media = ar, cohort = bbc:
+#  no_followup_pairwise estimate     SE  df z.ratio p.value
+#  FALSE - TRUE          0.17529 0.0578 Inf   3.033  0.0024
+# 
+# media = flat, cohort = bbc:
+#  no_followup_pairwise estimate     SE  df z.ratio p.value
+#  FALSE - TRUE          0.00941 0.0788 Inf   0.119  0.9049
+# 
+# media = ar, cohort = map:
+#  no_followup_pairwise estimate     SE  df z.ratio p.value
+#  FALSE - TRUE          0.01879 0.0772 Inf   0.244  0.8076
+# 
+# media = flat, cohort = map:
+#  no_followup_pairwise estimate     SE  df z.ratio p.value
+#  FALSE - TRUE          0.22126 0.0747 Inf   2.961  0.0031
+# 
+# media = ar, cohort = mil:
+#  no_followup_pairwise estimate     SE  df z.ratio p.value
+#  FALSE - TRUE         -0.00361 0.0752 Inf  -0.048  0.9617
+# 
+# media = flat, cohort = mil:
+#  no_followup_pairwise estimate     SE  df z.ratio p.value
+#  FALSE - TRUE          0.04011 0.0748 Inf   0.536  0.5918
+# 
+# media = ar, cohort = va:
+#  no_followup_pairwise estimate     SE  df z.ratio p.value
+#  FALSE - TRUE          0.04660 0.0786 Inf   0.593  0.5532
+# 
+# media = flat, cohort = va:
+#  no_followup_pairwise estimate     SE  df z.ratio p.value
+#  FALSE - TRUE          0.03701 0.0756 Inf   0.489  0.6246
+# 
+# Results are given on the log odds ratio (not the response) scale. 
+
+plot_model(fit.initial, type='int')[[4]]
+# note how qualitatively we have nearly identical pattern of results. We have no reason to suspect  
+
+
+```
+
+
+```{r}
+
+
+fit.followup <- glmer(formula = score ~ 1 + age + ar_frequency + presence + knew + media * time * gap * cohort 
+                     +  (1  | cohort : exp_title) + (1 | cohort : id) + (1| exp_title : exp_title_question),  
+                     family = binomial("logit"), nAGQ=0, control=glmerControl(optimizer = "nloptwrap"), data=combined_new)
 
 emm <- emmeans(fit.mod1, ~media*gap*time, type='response' )
 
@@ -606,13 +688,17 @@ plot <- combined_data_cor_screened |>
  stat_summary(geom = "errorbar", fun.data = ~mean_se(., mult = 1.96), linewidth =1, width=.5) + 
     stat_summary(fun.y = mean, geom="line",  linewidth=1) +
   geom_rug(aes(y=score, x=days/30)) +
-  geom_hline(yintercept=.25, linetype="dashed") + 
+  annotate('ribbon', x = c(-Inf, Inf), ymin = .3134, ymax = .3966, 
+           alpha = 0.4, fill = 'red') +
+  geom_hline(yintercept=.355, linetype="dashed") + 
   theme(text=element_text(size=14))
 
 
 
+
+
 plot |>
-ggsave(filename='interaction.png',width=7.5, height=6.5, bg='white')
+ggsave(filename='interaction.png', width=7.5, height=6.5, bg='white')
 
 
 
@@ -645,6 +731,38 @@ titles <- c("res", "ay", "sku", "tia", "hum", "dd", "met", "va", "ani", "sp", "s
 
 ```
 
+
+1-tail tests
+```{r}
+combined_data_cor_screened |>
+  filter(months=="t2", media=="ar") |>
+  select(score) |> 
+  t.test(mu=0.35503, alternative = "greater")
+
+# data:  select(filter(combined_data_cor_screened, months == "t2", media == "ar"), score)
+# t = 7.9317, df = 4821, p-value = 1.333e-15
+# alternative hypothesis: true mean is greater than 0.35503
+# 95 percent confidence interval:
+#  0.3995812       Inf
+# sample estimates:
+# mean of x 
+# 0.4112401 
+
+combined_data_cor_screened |>
+  filter(months=="t2", media=="flat") |>
+  select(score) |> 
+  t.test(mu=0.35503, alternative = "greater")
+
+# data:  select(filter(combined_data_cor_screened, months == "t2", media == "flat"), score)
+# t = 7.2702, df = 4540, p-value = 2.102e-13
+# alternative hypothesis: true mean is greater than 0.35503
+# 95 percent confidence interval:
+#  0.3960597       Inf
+# sample estimates:
+# mean of x 
+# 0.4080599 
+
+```
 
 
 presence
